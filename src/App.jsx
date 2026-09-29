@@ -59,6 +59,18 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
+  // Listen for session expiry from Axios interceptor
+  useEffect(() => {
+    const handleAuthExpired = (e) => {
+      setUser(null);
+      addToast(e.detail?.message || 'Your session has expired. Please sign in again.', 'warning');
+      setIsAuthOpen(true);
+    };
+
+    window.addEventListener('auth:expired', handleAuthExpired);
+    return () => window.removeEventListener('auth:expired', handleAuthExpired);
+  }, []);
+
   const handleLogout = () => {
     authStorage.removeToken();
     setUser(null);
@@ -69,6 +81,10 @@ export default function App() {
     setUser(userData);
   };
 
+  const handleOpenLogin = () => {
+    setIsAuthOpen(true);
+  };
+
   return (
     <div className="app-container">
       {/* Navbar */}
@@ -76,7 +92,7 @@ export default function App() {
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         user={user}
-        onLoginClick={() => setIsAuthOpen(true)}
+        onLoginClick={handleOpenLogin}
         onLogout={handleLogout}
         isHealthy={isHealthy}
         notificationCount={notificationCount}
@@ -87,6 +103,7 @@ export default function App() {
         {activeTab === 'dashboard' && (
           <DashboardView 
             user={user}
+            onLoginClick={handleOpenLogin}
             setActiveTab={setActiveTab}
             addToast={addToast}
           />
@@ -95,6 +112,7 @@ export default function App() {
         {activeTab === 'buildings' && (
           <BuildingsView 
             user={user}
+            onLoginClick={handleOpenLogin}
             setActiveTab={setActiveTab}
             setSelectedBuilding={setSelectedBuilding}
             addToast={addToast}
@@ -104,6 +122,7 @@ export default function App() {
         {activeTab === 'slots' && (
           <SlotsView 
             user={user}
+            onLoginClick={handleOpenLogin}
             selectedBuilding={selectedBuilding}
             setSelectedBuilding={setSelectedBuilding}
             setActiveTab={setActiveTab}
@@ -115,6 +134,7 @@ export default function App() {
         {activeTab === 'booking' && (
           <BookingView 
             user={user}
+            onLoginClick={handleOpenLogin}
             selectedBuilding={selectedBuilding}
             setSelectedBuilding={setSelectedBuilding}
             bookingSlot={bookingSlot}
@@ -126,6 +146,7 @@ export default function App() {
         {activeTab === 'admin' && (
           <AdminView 
             user={user}
+            onLoginClick={handleOpenLogin}
             addToast={addToast}
           />
         )}

@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Building2, MapPin, Search, Plus, Car, Trash2, ArrowRight } from 'lucide-react';
 import { api } from '../services/api';
+import SignInPrompt from './SignInPrompt';
 
-export default function BuildingsView({ user, setActiveTab, setSelectedBuilding, addToast }) {
+export default function BuildingsView({ user, onLoginClick, setActiveTab, setSelectedBuilding, addToast }) {
   const [buildings, setBuildings] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
@@ -19,6 +20,7 @@ export default function BuildingsView({ user, setActiveTab, setSelectedBuilding,
   });
 
   const loadBuildings = async () => {
+    if (!user) return;
     setLoading(true);
     try {
       const data = await api.buildings.getAll();
@@ -31,8 +33,10 @@ export default function BuildingsView({ user, setActiveTab, setSelectedBuilding,
   };
 
   useEffect(() => {
-    loadBuildings();
-  }, []);
+    if (user) {
+      loadBuildings();
+    }
+  }, [user]);
 
   const handleSearch = async (e) => {
     e.preventDefault();
@@ -91,6 +95,16 @@ export default function BuildingsView({ user, setActiveTab, setSelectedBuilding,
       addToast(err.message || 'Failed to delete building', 'error');
     }
   };
+
+  if (!user) {
+    return (
+      <SignInPrompt 
+        onLoginClick={onLoginClick}
+        title="Buildings Catalog Locked"
+        message="Accessing the campus buildings registry and slot availability requires an active session. Please sign in to explore buildings and their parking facilities."
+      />
+    );
+  }
 
   return (
     <div>

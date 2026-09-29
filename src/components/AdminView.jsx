@@ -1,13 +1,29 @@
 import React, { useState, useEffect } from 'react';
-import { ShieldAlert, Users, Building2, CalendarCheck, Trash2, RefreshCw, AlertTriangle } from 'lucide-react';
+import { 
+  ShieldAlert, 
+  Users, 
+  Building2, 
+  CalendarCheck, 
+  Trash2, 
+  RefreshCw, 
+  AlertTriangle,
+  Timer,
+  CheckCircle,
+  Clock,
+  Play
+} from 'lucide-react';
 import { api } from '../services/api';
+import SignInPrompt from './SignInPrompt';
 
-export default function AdminView({ user, addToast }) {
+export default function AdminView({ user, onLoginClick, addToast }) {
   const [dashboard, setDashboard] = useState(null);
   const [usersList, setUsersList] = useState([]);
+  const [bookingsList, setBookingsList] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [triggeringScheduler, setTriggeringScheduler] = useState(false);
 
   const fetchAdminData = async () => {
+    if (!user || user.role !== 'ADMIN') return;
     setLoading(true);
     try {
       // 1. Fetch admin dashboard
@@ -25,14 +41,24 @@ export default function AdminView({ user, addToast }) {
       } catch (err) {
         console.warn('Could not fetch users list:', err);
       }
+
+      // 3. Fetch all bookings for status breakdown
+      try {
+        const b = await api.bookings.getAll();
+        setBookingsList(Array.isArray(b) ? b : []);
+      } catch (err) {
+        console.warn('Could not fetch bookings list:', err);
+      }
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchAdminData();
-  }, []);
+    if (user && user.role === 'ADMIN') {
+      fetchAdminData();
+    }
+  }, [user]);
 
   const handleDeleteUser = async (id) => {
     if (!window.confirm(`Are you sure you want to delete user #${id}?`)) return;
@@ -45,18 +71,48 @@ export default function AdminView({ user, addToast }) {
     }
   };
 
-  if (!user || user.role !== 'ADMIN') {
+  const handleTriggerScheduler = async () => {
+    setTriggeringScheduler(true);
+    try {
+      const res = await api.bookings.closeExpired();
+      addToast(typeof res === 'string' ? res : 'Scheduler executed: expired slot bookings closed', 'success');
+      fetchAdminData();
+    } catch (err) {
+      addToast(err.message || 'Failed to execute expiry scheduler', 'error');
+    } finally {
+      setTriggeringScheduler(false);
+    }
+  };
+
+  if (!user) {
     return (
-      <div className="glass-card" style={{ textAlign: 'center', padding: '4rem 2rem' }}>
+      <SignInPrompt 
+        onLoginClick={onLoginClick}
+        title="Administrator Access Required"
+        message="The Admin console connects to Admin Service and User Service, which require an authorized administrator session. Please sign in with an Administrator account."
+      />
+    );
+  }
+
+  if (user.role !== 'ADMIN') {
+    return (
+      <div className="glass-card" style={{ textAlign: 'center', padding: '3.5rem 2rem', maxWidth: '620px', margin: '2rem auto' }}>
         <AlertTriangle size={54} color="var(--color-warning)" style={{ marginBottom: '1rem' }} />
         <h2 style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>Administrator Privileges Required</h2>
         <p style={{ color: 'var(--text-secondary)', maxWidth: '500px', margin: '0 auto 1.5rem auto' }}>
-          This section is protected by Spring Security role-based authorization (`hasAuthority('admin')`). 
-          Please sign in with an Administrator account (e.g. <code>admin@parking.com</code>).
+          Signed in as <strong>{user.email}</strong> with role <code>{user.role}</code>. 
+          This section is protected by Spring Security role authorization (<code>hasAuthority('admin')</code>). 
+          Please sign in with an Administrator account.
         </p>
+        <button className="btn btn-primary" onClick={onLoginClick}>
+          Switch to Admin Account
+        </button>
       </div>
     );
   }
+
+  const activeBookingsCount = bookingsList.filter(b => b.status && b.status.toUpperCase() !== 'CLOSED' && b.status.toUpperCase() !== 'CANCELLED').length;
+  const closedBookingsCount = bookingsList.filter(b => b.status && b.status.toUpperCase() === 'CLOSED').length;
 
   return (
     <div>
@@ -89,7 +145,7 @@ export default function AdminView({ user, addToast }) {
         display: 'grid',
         gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
         gap: '1.25rem',
-        marginBottom: '2.5rem'
+        marginBottom: '2rem'
       }}>
         <div className="glass-card" style={{ padding: '1.5rem', borderLeft: '4px solid var(--accent-primary)' }}>
           <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Aggregated Total Users</div>
@@ -112,12 +168,90 @@ export default function AdminView({ user, addToast }) {
         </div>
 
         <div className="glass-card" style={{ padding: '1.5rem', borderLeft: '4px solid var(--color-warning)' }}>
-          <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Aggregated Total Bookings</div>
+          <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Total Registered Bookings</div>
           <div style={{ fontSize: '2rem', fontWeight: 800, marginTop: '0.25rem' }}>
-            {dashboard ? dashboard.totalBookings ?? 0 : 0}
+            {dashboard ? dashboard.totalBookings ?? bookingsList.length : bookingsList.length}
           </div>
           <div style={{ fontSize: '0.75rem', color: 'var(--color-success)', marginTop: '0.5rem' }}>
-            ● Verified via Availability Service
+            ● {activeBookingsCount} Active • {closedBookingsCount} Closed
+          </div>
+        </div>
+      </div>
+
+      {/* Automated Scheduler Controller Card */}
+      <div className="glass-card" style={{ padding: '1.75rem', marginBottom: '2.5rem', border: '1px solid rgba(99, 102, 241, 0.3)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem', marginBottom: '1rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <div style={{
+              width: '42px',
+              height: '42px',
+              borderRadius: 'var(--radius-md)',
+              background: 'rgba(99, 102, 241, 0.15)',
+              color: 'var(--accent-primary)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}>
+              <Timer size={24} />
+            </div>
+            <div>
+              <h2 style={{ fontSize: '1.25rem', fontWeight: 700 }}>Automated Slot Booking Expiry Scheduler</h2>
+              <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>
+                Spring Boot background scheduler runs continuously on <code>availability-service</code> (fixed rate: 60s).
+              </p>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <span className="badge badge-success">
+              <CheckCircle size={12} />
+              <span>Daemon Active (60s)</span>
+            </span>
+            <button 
+              className="btn btn-primary btn-sm"
+              onClick={handleTriggerScheduler}
+              disabled={triggeringScheduler}
+            >
+              <Play size={13} className={triggeringScheduler ? 'animate-spin' : ''} />
+              <span>{triggeringScheduler ? 'Executing...' : 'Run Expiry Check Now'}</span>
+            </button>
+          </div>
+        </div>
+
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+          gap: '1rem',
+          padding: '1rem',
+          background: 'rgba(255, 255, 255, 0.02)',
+          borderRadius: 'var(--radius-md)',
+          border: '1px solid var(--border-subtle)'
+        }}>
+          <div>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Active / Upcoming Bookings
+            </span>
+            <div style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--color-success)', marginTop: '0.2rem' }}>
+              {activeBookingsCount}
+            </div>
+          </div>
+
+          <div>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Closed / Expired Bookings
+            </span>
+            <div style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
+              {closedBookingsCount}
+            </div>
+          </div>
+
+          <div>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Scheduled Policy
+            </span>
+            <div style={{ fontSize: '0.9rem', color: 'var(--text-primary)', marginTop: '0.4rem', fontWeight: 500 }}>
+              bookingDate &le; presentTime &rarr; CLOSED
+            </div>
           </div>
         </div>
       </div>

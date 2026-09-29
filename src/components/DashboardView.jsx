@@ -9,11 +9,12 @@ import {
   ShieldCheck, 
   ExternalLink,
   PlusCircle,
-  RefreshCw
+  RefreshCw,
+  LogIn
 } from 'lucide-react';
 import { api } from '../services/api';
 
-export default function DashboardView({ user, setActiveTab, addToast }) {
+export default function DashboardView({ user, onLoginClick, setActiveTab, addToast }) {
   const [stats, setStats] = useState({
     buildings: 0,
     slots: 0,
@@ -26,26 +27,39 @@ export default function DashboardView({ user, setActiveTab, addToast }) {
   const fetchDashboardData = async () => {
     setLoading(true);
     try {
-      // 1. Fetch buildings
+      // 1. Health check is public (actuator)
+      const h = await api.health.checkGateway().catch(() => ({ status: 'UP' }));
+      setHealth({ status: h.status || 'UP', gateway: true });
+
+      // If user is not signed in, do not fire protected calls
+      if (!user) {
+        setStats({
+          buildings: 2,
+          slots: 8,
+          users: 3,
+          bookings: 3
+        });
+        return;
+      }
+
+      // 2. Fetch buildings
       const bList = await api.buildings.getAll().catch(() => []);
       const buildingCount = Array.isArray(bList) ? bList.length : 0;
 
-      // 2. Fetch admin dashboard stats if user is admin or count
+      // 3. Fetch user and booking counts
       let userCount = 0;
       let bookingCount = 0;
       try {
         const uCount = await api.users.getCount();
         userCount = uCount || 0;
       } catch (e) {
-        // May require admin token
+        // requires admin
       }
 
       try {
         const bCount = await api.bookings.getCount();
         bookingCount = bCount || 0;
-      } catch (e) {
-        // Fallback
-      }
+      } catch (e) {}
 
       // Calculate total slots across known buildings
       let totalSlots = 0;
@@ -62,14 +76,10 @@ export default function DashboardView({ user, setActiveTab, addToast }) {
 
       setStats({
         buildings: buildingCount,
-        slots: totalSlots || 8, // fallback baseline if empty
+        slots: totalSlots || 8,
         users: userCount || (user ? 2 : 1),
         bookings: bookingCount || 0
       });
-
-      // Check gateway health
-      const h = await api.health.checkGateway().catch(() => ({ status: 'UP' }));
-      setHealth({ status: h.status || 'UP', gateway: true });
     } catch (err) {
       console.error(err);
     } finally {
@@ -132,6 +142,52 @@ export default function DashboardView({ user, setActiveTab, addToast }) {
           </a>
         </div>
       </div>
+
+      {/* Guest Mode Banner */}
+      {!user && (
+        <div style={{
+          background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.12) 0%, rgba(139, 92, 246, 0.1) 100%)',
+          border: '1px solid rgba(99, 102, 241, 0.3)',
+          borderRadius: 'var(--radius-lg)',
+          padding: '1.25rem 1.75rem',
+          marginBottom: '2rem',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: '1rem',
+          boxShadow: '0 4px 20px rgba(0, 0, 0, 0.2)'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            <div style={{
+              width: '44px',
+              height: '44px',
+              borderRadius: '50%',
+              background: 'rgba(99, 102, 241, 0.25)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0
+            }}>
+              <LogIn size={22} color="#A5B4FC" />
+            </div>
+            <div>
+              <h3 style={{ fontSize: '1.05rem', fontWeight: 700, margin: 0 }}>Guest Mode Active</h3>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '0.2rem', margin: 0 }}>
+                Sign in to query live slot configurations, reserve parking spaces, and access administrator controls.
+              </p>
+            </div>
+          </div>
+          <button 
+            className="btn btn-primary"
+            onClick={onLoginClick}
+            id="btn-dashboard-signin"
+          >
+            <LogIn size={16} />
+            <span>Sign In Now</span>
+          </button>
+        </div>
+      )}
 
       {/* Metric Cards Grid */}
       <div style={{
