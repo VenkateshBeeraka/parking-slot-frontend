@@ -1,152 +1,145 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  Car, 
-  Layers, 
-  Plus, 
-  CalendarCheck, 
-  CheckCircle2, 
-  XCircle, 
-  Trash2, 
+import React, { useState, useEffect, useMemo } from 'react';
+import {
+  Layers,
+  Plus,
+  CalendarPlus,
+  Trash2,
   Building2,
-  Calendar,
   Clock,
-  Settings2
+  Settings2,
+  CalendarRange,
+  CalendarOff,
+  SquareParking,
+  Car,
+  AlertCircle
 } from 'lucide-react';
 import { api } from '../services/api';
-import SignInPrompt from './SignInPrompt';
+import { navigate, buildHref } from '../lib/router';
+import { parseDate, toDateInput, toTimeInput, toApiDateTime, formatDateTime, formatTime, formatRange, bookingState, bookingEnd, sortByDate, pluralize } from '../lib/format';
+import { Modal, PageHeader, EmptyState, SkeletonCards, Spinner, Skeleton, useConfirm } from './ui';
 
-export default function SlotsView({ user, onLoginClick, selectedBuilding, setSelectedBuilding, setActiveTab, setBookingSlot, addToast }) {
+const inMonths = (n) => {
+  const d = new Date();
+  d.setMonth(d.getMonth() + n);
+  return d;
+};
+
+const EMPTY_SLOT = { slotNumber: '', floorNumber: '1', division: 'A' };
+
+export default function SlotsView({ admin, params, addToast }) {
+  const confirm = useConfirm();
   const [buildings, setBuildings] = useState([]);
+  const [buildingsLoading, setBuildingsLoading] = useState(true);
   const [slots, setSlots] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [showAddModal, setShowAddModal] = useState(false);
+  const [error, setError] = useState(null);
+  const [floorFilter, setFloorFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
 
-  // Slot Availability Schedule Modal State
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [savingSlot, setSavingSlot] = useState(false);
+  const [newSlot, setNewSlot] = useState(EMPTY_SLOT);
+
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [targetSlot, setTargetSlot] = useState(null);
-  const todayStr = new Date().toISOString().split('T')[0];
-  const [fromDate, setFromDate] = useState(todayStr);
+  const [fromDate, setFromDate] = useState('');
   const [fromTime, setFromTime] = useState('00:00');
-  const [toDate, setToDate] = useState('2026-12-31');
+  const [toDate, setToDate] = useState('');
   const [toTime, setToTime] = useState('23:59');
   const [savingSchedule, setSavingSchedule] = useState(false);
 
-  const [newSlot, setNewSlot] = useState({
-    buildingNumber: '',
-    slotNumber: '',
-    floorNumber: 1,
-    division: 'A'
-  });
+  const building = params.building || buildings[0]?.buildingNumber || '';
+  const currentBuilding = buildings.find(b => b.buildingNumber === building);
 
-  // Load building list for selector
+  const selectBuilding = (value) => {
+    setFloorFilter('all');
+    navigate('slots', { building: value }, { replace: true });
+  };
+
   useEffect(() => {
-    if (!user) return;
     api.buildings.getAll()
-      .then(bList => {
-        const list = Array.isArray(bList) ? bList : [];
-        setBuildings(list);
-        if (!selectedBuilding && list.length > 0) {
-          setSelectedBuilding(list[0].buildingNumber);
-        }
-      })
-      .catch(err => console.error(err));
-  }, [user]);
+      .then(setBuildings)
+      .catch(err => addToast(err.message, 'error'))
+      .finally(() => setBuildingsLoading(false));
+  }, []);
 
-  // Load slots when selectedBuilding changes
   const loadSlots = async () => {
-    if (!user || !selectedBuilding) return;
+    if (!building) return;
     setLoading(true);
+    setError(null);
     try {
-      const sList = await api.slots.getByBuilding(selectedBuilding);
-      setSlots(Array.isArray(sList) ? sList : []);
+      setSlots(await api.slots.getByBuilding(building));
     } catch (err) {
       setSlots([]);
-      addToast(`No slots loaded for ${selectedBuilding}`, 'info');
+      if (err.status !== 404) setError(err.message);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    if (user && selectedBuilding) {
-      loadSlots();
-    }
-  }, [selectedBuilding, user]);
+    loadSlots();
+  }, [building]);
 
   const handleCreateSlot = async (e) => {
     e.preventDefault();
+    setSavingSlot(true);
     try {
-      await api.slots.create({
-        ...newSlot,
-        buildingNumber: selectedBuilding,
-        floorNumber: parseInt(newSlot.floorNumber)
-      });
-      addToast(`Slot ${newSlot.slotNumber} created!`, 'success');
+      await api.slots.create(building, newSlot);
+      addToast(`Slot ${newSlot.slotNumber} added to ${currentBuilding?.buildingName || building}`, 'success');
       setShowAddModal(false);
-      setNewSlot({
-        buildingNumber: selectedBuilding,
-        slotNumber: '',
-        floorNumber: 1,
-        division: 'A'
-      });
+      setNewSlot(EMPTY_SLOT);
       loadSlots();
     } catch (err) {
-      addToast(err.message || 'Failed to create slot', 'error');
+      addToast(err.message, 'error');
+    } finally {
+      setSavingSlot(false);
     }
   };
 
   const handleDeleteSlot = async (slotNumber) => {
-    if (!window.confirm(`Delete slot ${slotNumber} from ${selectedBuilding}?`)) return;
+    const ok = await confirm({
+      title: `Delete slot ${slotNumber}?`,
+      message: 'The slot and its availability window will be removed. Existing reservations for it may be affected.',
+      confirmText: 'Delete slot'
+    });
+    if (!ok) return;
     try {
-      await api.slots.delete(selectedBuilding, slotNumber);
-      addToast(`Slot ${slotNumber} removed`, 'success');
+      await api.slots.delete(building, slotNumber);
+      addToast(`Slot ${slotNumber} deleted`, 'success');
       loadSlots();
     } catch (err) {
-      addToast(err.message || 'Failed to delete slot', 'error');
+      addToast(err.message, 'error');
     }
   };
 
   const openScheduleModal = (slot) => {
     setTargetSlot(slot);
-    if (slot.availability && slot.availability.fromDate && slot.availability.toDate) {
-      const f = new Date(slot.availability.fromDate);
-      const t = new Date(slot.availability.toDate);
-      if (!isNaN(f.getTime())) {
-        setFromDate(f.toISOString().split('T')[0]);
-        setFromTime(f.toTimeString().slice(0, 5));
-      }
-      if (!isNaN(t.getTime())) {
-        setToDate(t.toISOString().split('T')[0]);
-        setToTime(t.toTimeString().slice(0, 5));
-      }
-    } else {
-      setFromDate(todayStr);
-      setFromTime('00:00');
-      setToDate('2026-12-31');
-      setToTime('23:59');
-    }
+    const f = parseDate(slot.availability?.fromDate);
+    const t = parseDate(slot.availability?.toDate);
+    setFromDate(toDateInput(f || new Date()));
+    setFromTime(f ? toTimeInput(f) : '00:00');
+    setToDate(toDateInput(t || inMonths(3)));
+    setToTime(t ? toTimeInput(t) : '23:59');
     setShowScheduleModal(true);
   };
 
+  const windowInvalid = fromDate && toDate && toApiDateTime(toDate, toTime) <= toApiDateTime(fromDate, fromTime);
+
   const handleSaveSchedule = async (e) => {
     e.preventDefault();
-    if (!targetSlot) return;
+    if (!targetSlot || windowInvalid) return;
     setSavingSchedule(true);
     try {
-      const fromDateTime = `${fromDate} ${fromTime.length === 5 ? fromTime + ':00' : fromTime}`;
-      const toDateTime = `${toDate} ${toTime.length === 5 ? toTime + ':00' : toTime}`;
-
-      await api.availability.setSlotAvailability(selectedBuilding, targetSlot.slotNumber, {
-        fromDate: fromDateTime,
-        toDate: toDateTime,
-        bookings: targetSlot.availability ? targetSlot.availability.bookings : []
+      await api.availability.setSlotWindow(building, targetSlot.slotNumber, {
+        fromDate: toApiDateTime(fromDate, fromTime),
+        toDate: toApiDateTime(toDate, toTime)
       });
-
-      addToast(`Availability schedule updated for Slot ${targetSlot.slotNumber}!`, 'success');
+      addToast(`Availability updated for slot ${targetSlot.slotNumber}`, 'success');
       setShowScheduleModal(false);
       loadSlots();
     } catch (err) {
-      addToast(err.message || 'Failed to update slot schedule', 'error');
+      addToast(err.message, 'error');
     } finally {
       setSavingSchedule(false);
     }
@@ -154,405 +147,386 @@ export default function SlotsView({ user, onLoginClick, selectedBuilding, setSel
 
   const handleRemoveSchedule = async () => {
     if (!targetSlot) return;
-    if (!window.confirm(`Remove availability schedule for Slot ${targetSlot.slotNumber}?`)) return;
-    setSavingSchedule(true);
+    const slotNumber = targetSlot.slotNumber;
+    setShowScheduleModal(false);
+    const ok = await confirm({
+      title: 'Remove availability window?',
+      message: `Slot ${slotNumber} won't be bookable until a new window is set.`,
+      confirmText: 'Remove window'
+    });
+    if (!ok) {
+      setShowScheduleModal(true);
+      return;
+    }
     try {
-      await api.availability.removeSlotAvailability(selectedBuilding, targetSlot.slotNumber);
-      addToast(`Removed schedule for Slot ${targetSlot.slotNumber}`, 'success');
-      setShowScheduleModal(false);
+      await api.availability.removeSlotWindow(building, slotNumber);
+      addToast(`Availability removed for slot ${slotNumber}`, 'success');
       loadSlots();
     } catch (err) {
-      addToast(err.message || 'Failed to remove schedule', 'error');
-    } finally {
-      setSavingSchedule(false);
+      addToast(err.message, 'error');
     }
   };
 
-  const formatDateTimeDisplay = (val) => {
-    if (!val) return 'N/A';
-    try {
-      const d = new Date(val);
-      if (isNaN(d.getTime())) return String(val);
-      return d.toLocaleDateString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit'
-      });
-    } catch {
-      return String(val);
-    }
-  };
-
-  if (!user) {
-    return (
-      <SignInPrompt 
-        onLoginClick={onLoginClick}
-        title="Parking Slot Grid Locked"
-        message="Interactive floor maps and slot schedules are secured. Please sign in to view available spots and manage parking slot availability."
-      />
-    );
-  }
+  const hasWindow = (s) => !!(s.availability?.fromDate && s.availability?.toDate);
+  const floors = useMemo(
+    () => [...new Set(slots.map(s => s.floorNumber).filter(f => f !== undefined && f !== null && f !== ''))]
+      .sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true })),
+    [slots]
+  );
+  const visibleSlots = slots.filter(s =>
+    (floorFilter === 'all' || String(s.floorNumber) === String(floorFilter)) &&
+    (statusFilter === 'all' || (statusFilter === 'bookable' ? hasWindow(s) : !hasWindow(s)))
+  );
+  const scheduledCount = slots.filter(hasWindow).length;
 
   return (
     <div>
-      {/* Header */}
-      <div style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: '2rem',
-        flexWrap: 'wrap',
-        gap: '1rem'
-      }}>
-        <div>
-          <h1 style={{ fontSize: '1.8rem', fontWeight: 800 }}>
-            Parking <span className="gradient-text">Slot Grid</span>
-          </h1>
-          <p style={{ color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
-            Interactive floor maps, slot configurations, and date-time availability schedules.
-          </p>
-        </div>
+      <PageHeader
+        eyebrow={<><SquareParking size={13} /> {admin ? 'Inventory' : 'Parking'}</>}
+        title={currentBuilding ? currentBuilding.buildingName : 'Parking slots'}
+        subtitle={
+          currentBuilding
+            ? `${[currentBuilding.area, currentBuilding.town].filter(Boolean).join(', ')} · ${admin ? 'Manage slots and when they can be booked.' : 'Slots and when they can be booked.'}`
+            : 'Slots and availability for each building.'
+        }
+        actions={
+          <>
+            <a className="btn btn-secondary" href={buildHref('book', { building })}>
+              <CalendarPlus size={16} />
+              <span>Book here</span>
+            </a>
+            {admin && (
+              <button className="btn btn-primary" onClick={() => setShowAddModal(true)} disabled={!building} id="btn-add-slot">
+                <Plus size={18} />
+                <span>Add slot</span>
+              </button>
+            )}
+          </>
+        }
+      />
 
-        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-          {user && user.role === 'ADMIN' && (
-            <button 
-              className="btn btn-primary"
-              onClick={() => {
-                setNewSlot(prev => ({ ...prev, buildingNumber: selectedBuilding }));
-                setShowAddModal(true);
-              }}
-              id="btn-add-slot"
-            >
-              <Plus size={18} />
-              <span>Add New Slot</span>
-            </button>
-          )}
+      <div className="card card-pad-sm mb-lg">
+        <div className="row gap-md" style={{ marginBottom: '0.75rem' }}>
+          <Building2 size={16} style={{ color: 'var(--accent-text)' }} />
+          <span className="text-sm strong">Building</span>
         </div>
+        {buildingsLoading ? (
+          <div className="row gap-sm">
+            {[120, 150, 110].map((w, i) => <Skeleton key={i} width={w} height={36} radius={999} />)}
+          </div>
+        ) : buildings.length === 0 ? (
+          <div className="text-sm muted">No buildings yet.</div>
+        ) : (
+          <div className="chip-row">
+            {buildings.map(b => (
+              <button
+                key={b.buildingNumber}
+                onClick={() => selectBuilding(b.buildingNumber)}
+                className={`chip ${building === b.buildingNumber ? 'active' : ''}`}
+              >
+                <span>{b.buildingName}</span>
+                <span className="chip-code">{b.buildingNumber}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* Building Selector Bar */}
-      <div className="glass-card" style={{ padding: '1rem 1.5rem', marginBottom: '2rem', display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.9rem', fontWeight: 600 }}>
-          <Building2 size={18} color="var(--accent-primary)" />
-          <span>Active Building:</span>
-        </div>
-        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', flex: 1 }}>
-          {buildings.map(b => (
-            <button
-              key={b.buildingNumber}
-              onClick={() => setSelectedBuilding(b.buildingNumber)}
-              className={`btn btn-sm ${selectedBuilding === b.buildingNumber ? 'btn-primary' : 'btn-secondary'}`}
-              style={{ padding: '0.45rem 0.85rem' }}
-            >
-              <span>{b.buildingName}</span>
-              <span style={{ opacity: 0.75, fontSize: '0.75rem' }}>({b.buildingNumber})</span>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Visual Slot Grid */}
-      {loading ? (
-        <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)' }}>
-          Loading slot layouts from Slot Service...
+      {loading || buildingsLoading ? (
+        <SkeletonCards count={8} height={250} className="grid grid-slots" />
+      ) : error ? (
+        <div className="card">
+          <EmptyState icon={<AlertCircle size={28} />} title="Couldn't load slots"
+            action={<button className="btn btn-secondary" onClick={loadSlots}>Try again</button>}>
+            {error}
+          </EmptyState>
         </div>
       ) : slots.length === 0 ? (
-        <div className="glass-card" style={{ textAlign: 'center', padding: '3rem' }}>
-          <Car size={48} style={{ color: 'var(--text-muted)', marginBottom: '1rem' }} />
-          <h3>No Parking Slots Registered</h3>
-          <p style={{ color: 'var(--text-secondary)', marginTop: '0.5rem' }}>
-            There are currently no slots configured for building <strong>{selectedBuilding}</strong>.
-          </p>
-          {user && user.role === 'ADMIN' && (
-            <button 
-              className="btn btn-primary" 
-              style={{ marginTop: '1.25rem' }}
-              onClick={() => setShowAddModal(true)}
-            >
-              <Plus size={16} />
-              <span>Create First Slot</span>
-            </button>
-          )}
+        <div className="card">
+          <EmptyState
+            icon={<Car size={28} />}
+            title="No slots in this building"
+            action={admin && (
+              <button className="btn btn-primary" onClick={() => setShowAddModal(true)}>
+                <Plus size={16} />
+                <span>Add first slot</span>
+              </button>
+            )}
+          >
+            {admin ? 'Add slots so people can start booking here.' : "This building doesn't offer parking slots yet."}
+          </EmptyState>
         </div>
       ) : (
         <div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-            <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
-              Showing <strong>{slots.length}</strong> configured slot(s)
+          <div className="row between wrap gap-md" style={{ marginBottom: '1rem' }}>
+            <div className="row gap-sm wrap">
+              <span className="badge badge-neutral">{pluralize(slots.length, 'slot')}</span>
+              <span className="badge badge-success">{scheduledCount} bookable</span>
+              {slots.length - scheduledCount > 0 && (
+                <span className="badge badge-warning">{slots.length - scheduledCount} without a window</span>
+              )}
             </div>
-            <div style={{ display: 'flex', gap: '1rem', fontSize: '0.8rem' }}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                <span style={{ width: '10px', height: '10px', borderRadius: '2px', background: 'var(--color-success)' }}></span>
-                <span>Configured Window</span>
-              </span>
-              <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                <span style={{ width: '10px', height: '10px', borderRadius: '2px', background: 'var(--color-warning)' }}></span>
-                <span>No Schedule Set</span>
-              </span>
+            <div className="row gap-sm wrap">
+              {admin && (
+                <select
+                  className="input-field"
+                  style={{ height: 34, width: 'auto', fontSize: '0.82rem' }}
+                  value={statusFilter}
+                  onChange={e => setStatusFilter(e.target.value)}
+                  aria-label="Filter by availability"
+                >
+                  <option value="all">All slots</option>
+                  <option value="bookable">Bookable</option>
+                  <option value="unscheduled">Without a window</option>
+                </select>
+              )}
+              {floors.length > 1 && (
+                <div className="row gap-sm">
+                  <Layers size={15} className="muted" />
+                  <select
+                    className="input-field"
+                    style={{ height: 34, width: 'auto', fontSize: '0.82rem' }}
+                    value={floorFilter}
+                    onChange={e => setFloorFilter(e.target.value)}
+                    aria-label="Filter by level"
+                  >
+                    <option value="all">All levels</option>
+                    {floors.map(f => <option key={f} value={f}>Level {f}</option>)}
+                  </select>
+                </div>
+              )}
             </div>
           </div>
 
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
-            gap: '1.25rem'
-          }}>
-            {slots.map(s => {
-              const hasAvail = s.availability && s.availability.fromDate && s.availability.toDate;
+          {visibleSlots.length === 0 ? (
+            <div className="card">
+              <EmptyState icon={<SquareParking size={26} />} title="No slots match these filters"
+                action={<button className="btn btn-secondary" onClick={() => { setFloorFilter('all'); setStatusFilter('all'); }}>Clear filters</button>} />
+            </div>
+          ) : (
+            <div className="grid grid-slots stagger" key={`${building}-${floorFilter}-${statusFilter}`}>
+              {visibleSlots.map((s, i) => {
+                const scheduled = hasWindow(s);
+                const slotBookings = s.availability?.bookings || [];
+                const inUse = slotBookings.find(b => bookingState(b) === 'active');
+                const nextBooking = sortByDate(slotBookings.filter(b => bookingState(b) === 'upcoming'), 'asc')[0];
+                const tone = scheduled ? 'var(--color-success)' : 'var(--color-warning)';
 
-              return (
-                <div 
-                  key={s.id || s.slotNumber} 
-                  className="glass-card"
-                  style={{
-                    padding: '1.25rem',
-                    borderTop: `4px solid ${hasAvail ? 'var(--color-success)' : 'var(--color-warning)'}`,
-                    display: 'flex',
-                    flexDirection: 'column',
-                    justifyContent: 'space-between'
-                  }}
-                >
-                  <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem' }}>
-                      <div style={{ fontSize: '1.2rem', fontWeight: 800 }}>
-                        {s.slotNumber}
-                      </div>
-                      <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
-                        {user && user.role === 'ADMIN' && (
-                          <button
-                            onClick={() => openScheduleModal(s)}
-                            style={{ background: 'transparent', border: 'none', color: 'var(--accent-primary)', cursor: 'pointer', padding: '2px' }}
-                            title="Configure Date/Time Schedule"
-                          >
-                            <Settings2 size={16} />
-                          </button>
-                        )}
-                        {user && user.role === 'ADMIN' && (
-                          <button
-                            onClick={() => handleDeleteSlot(s.slotNumber)}
-                            style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '2px' }}
-                            title="Delete Slot"
-                          >
-                            <Trash2 size={16} />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <span>Floor Level:</span>
-                        <strong style={{ color: 'var(--text-primary)' }}>Floor {s.floorNumber}</strong>
-                      </div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <span>Division:</span>
-                        <strong style={{ color: 'var(--text-primary)' }}>Wing {s.division}</strong>
-                      </div>
-                    </div>
-
-                    {/* Availability Schedule Info */}
-                    <div style={{
-                      padding: '0.65rem 0.75rem',
-                      background: 'rgba(255, 255, 255, 0.02)',
-                      border: '1px solid var(--border-subtle)',
-                      borderRadius: 'var(--radius-sm)',
-                      marginBottom: '1rem',
-                      fontSize: '0.78rem'
-                    }}>
-                      <div style={{ color: 'var(--text-muted)', marginBottom: '0.25rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                        <Clock size={12} />
-                        <span>Availability Window:</span>
-                      </div>
-                      {hasAvail ? (
-                        <div style={{ color: 'var(--text-primary)', lineHeight: 1.4 }}>
-                          <div><strong style={{ color: 'var(--color-success)' }}>From:</strong> {formatDateTimeDisplay(s.availability.fromDate)}</div>
-                          <div><strong style={{ color: 'var(--color-info)' }}>To:</strong> {formatDateTimeDisplay(s.availability.toDate)}</div>
+                return (
+                  <div key={s.id || s.slotNumber} className="card card-interactive slot-card" style={{ '--i': i, '--slot-tone': tone }}>
+                    <div className="card-pad-sm stack gap-md" style={{ flex: 1 }}>
+                      <div className="row gap-md">
+                        <div className="slot-bay"><Car size={20} /></div>
+                        <div className="grow">
+                          <div className="slot-number">{s.slotNumber}</div>
+                          {inUse ? (
+                            <span className="badge badge-info" style={{ marginTop: 4 }}>
+                              <span className="dot dot-live" />
+                              In use until {formatTime(bookingEnd(inUse))}
+                            </span>
+                          ) : (
+                            <span className={`badge ${scheduled ? 'badge-success' : 'badge-warning'}`} style={{ marginTop: 4 }}>
+                              <span className="dot" />
+                              {scheduled ? 'Free now' : 'No window set'}
+                            </span>
+                          )}
                         </div>
+                        {admin && (
+                          <div className="row" style={{ alignSelf: 'flex-start', marginRight: -6 }}>
+                            <button
+                              onClick={() => openScheduleModal(s)}
+                              className="btn btn-ghost btn-icon btn-sm"
+                              title="Set availability"
+                              aria-label={`Set availability for ${s.slotNumber}`}
+                            >
+                              <Settings2 size={15} />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteSlot(s.slotNumber)}
+                              className="btn btn-ghost btn-icon btn-sm"
+                              title="Delete slot"
+                              aria-label={`Delete ${s.slotNumber}`}
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      <dl className="kv">
+                        <dt>Level</dt>
+                        <dd>{s.floorNumber ?? '—'}</dd>
+                        <dt>Wing</dt>
+                        <dd>{s.division ?? '—'}</dd>
+                        {admin && scheduled && (
+                          <>
+                            <dt>Next booking</dt>
+                            <dd className="text-xs" style={{ alignSelf: 'center' }}>{nextBooking ? formatRange(nextBooking.bookingDate, bookingEnd(nextBooking)) : 'None'}</dd>
+                          </>
+                        )}
+                      </dl>
+
+                      <div className="window-box">
+                        <div className="row gap-xs muted text-xs" style={{ marginBottom: '0.45rem' }}>
+                          <Clock size={12} />
+                          <span>Bookable between</span>
+                        </div>
+                        {scheduled ? (
+                          <div className="timeline">
+                            <div className="timeline-item" style={{ '--tl-color': 'var(--color-success)' }}>
+                              {formatDateTime(s.availability.fromDate)}
+                            </div>
+                            <div className="timeline-item" style={{ '--tl-color': 'var(--color-info)' }}>
+                              {formatDateTime(s.availability.toDate)}
+                            </div>
+                          </div>
+                        ) : (
+                          <span style={{ color: 'var(--color-warning-text)' }}>
+                            {admin ? 'Set a window to make this slot bookable' : 'Not available for booking yet'}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="card-footer">
+                      {admin && !scheduled ? (
+                        <button className="btn btn-secondary btn-sm grow" onClick={() => openScheduleModal(s)}>
+                          <CalendarRange size={14} />
+                          <span>Set availability</span>
+                        </button>
                       ) : (
-                        <span style={{ color: 'var(--color-warning)' }}>No schedule configured</span>
+                        <a
+                          className={`btn btn-primary btn-sm grow ${scheduled ? '' : 'disabled'}`}
+                          href={scheduled ? buildHref('book', { building, slot: s.slotNumber }) : undefined}
+                          aria-disabled={!scheduled}
+                          style={scheduled ? undefined : { opacity: 0.5, pointerEvents: 'none' }}
+                        >
+                          <CalendarPlus size={14} />
+                          <span>Book this slot</span>
+                        </a>
                       )}
                     </div>
                   </div>
-
-                  <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
-                    <button
-                      className="btn btn-secondary btn-sm"
-                      style={{ flex: 1 }}
-                      onClick={() => {
-                        setBookingSlot(s.slotNumber);
-                        setActiveTab('booking');
-                      }}
-                    >
-                      <CalendarCheck size={14} />
-                      <span>Book Slot</span>
-                    </button>
-                    {user && user.role === 'ADMIN' && (
-                      <button
-                        className="btn btn-secondary btn-sm"
-                        onClick={() => openScheduleModal(s)}
-                        title="Set Schedule"
-                        style={{ padding: '0.4rem 0.6rem' }}
-                      >
-                        <Clock size={14} />
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
-      {/* Add Slot Modal */}
-      {showAddModal && (
-        <div className="modal-overlay" onClick={() => setShowAddModal(false)}>
-          <div className="modal-content" onClick={e => e.stopPropagation()}>
-            <h2 style={{ fontSize: '1.3rem', marginBottom: '1rem' }}>Create Slot in {selectedBuilding}</h2>
-            <form onSubmit={handleCreateSlot}>
-              <div className="input-group">
-                <label className="input-label">Slot Identifier / Number</label>
-                <input 
-                  type="text" 
-                  className="input-field" 
-                  placeholder="e.g. SLOT-A101"
-                  value={newSlot.slotNumber}
-                  onChange={e => setNewSlot({ ...newSlot, slotNumber: e.target.value })}
+      <Modal
+        open={showAddModal}
+        onClose={() => !savingSlot && setShowAddModal(false)}
+        icon={<Plus size={20} />}
+        tone="success"
+        title="Add parking slot"
+        subtitle={<>New slot in <strong className="strong">{currentBuilding?.buildingName || building}</strong></>}
+      >
+        <form onSubmit={handleCreateSlot}>
+          <div className="modal-body">
+            <div className="input-group">
+              <label className="input-label">Slot number</label>
+              <input
+                type="text"
+                className="input-field mono"
+                placeholder="A-103"
+                value={newSlot.slotNumber}
+                onChange={e => setNewSlot({ ...newSlot, slotNumber: e.target.value })}
+                required
+              />
+              <span className="input-hint">Shown to drivers, e.g. the number painted on the bay</span>
+            </div>
+            <div className="grid grid-2" style={{ gap: '0.75rem' }}>
+              <div className="input-group" style={{ marginBottom: 0 }}>
+                <label className="input-label">Level</label>
+                <input
+                  type="text"
+                  className="input-field"
+                  placeholder="1"
+                  value={newSlot.floorNumber}
+                  onChange={e => setNewSlot({ ...newSlot, floorNumber: e.target.value })}
                   required
                 />
               </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-                <div className="input-group">
-                  <label className="input-label">Floor Level</label>
-                  <input 
-                    type="number" 
-                    className="input-field" 
-                    placeholder="1"
-                    value={newSlot.floorNumber}
-                    onChange={e => setNewSlot({ ...newSlot, floorNumber: e.target.value })}
-                    required
-                  />
-                </div>
-
-                <div className="input-group">
-                  <label className="input-label">Division / Wing</label>
-                  <input 
-                    type="text" 
-                    className="input-field" 
-                    placeholder="e.g. A or North"
-                    value={newSlot.division}
-                    onChange={e => setNewSlot({ ...newSlot, division: e.target.value })}
-                    required
-                  />
-                </div>
+              <div className="input-group" style={{ marginBottom: 0 }}>
+                <label className="input-label">Wing</label>
+                <input
+                  type="text"
+                  className="input-field"
+                  placeholder="A"
+                  value={newSlot.division}
+                  onChange={e => setNewSlot({ ...newSlot, division: e.target.value })}
+                  required
+                />
               </div>
-
-              <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.5rem', justifyContent: 'flex-end' }}>
-                <button type="button" className="btn btn-secondary" onClick={() => setShowAddModal(false)}>Cancel</button>
-                <button type="submit" className="btn btn-primary">Save Slot</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Configure Slot Availability Schedule Modal */}
-      {showScheduleModal && targetSlot && (
-        <div className="modal-overlay" onClick={() => setShowScheduleModal(false)}>
-          <div className="modal-content" onClick={e => e.stopPropagation()}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '1rem' }}>
-              <Clock size={22} color="var(--accent-primary)" />
-              <h2 style={{ fontSize: '1.3rem' }}>Availability Schedule: {targetSlot.slotNumber}</h2>
             </div>
-            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1.25rem' }}>
-              Set exact start and end date with time for slot availability in building <strong>{selectedBuilding}</strong>.
-            </p>
-
-            <form onSubmit={handleSaveSchedule}>
-              <div style={{ marginBottom: '1rem' }}>
-                <strong style={{ fontSize: '0.85rem', color: 'var(--color-success)', display: 'block', marginBottom: '0.4rem' }}>
-                  Available From (Date & Time)
-                </strong>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-                  <div className="input-group">
-                    <label className="input-label">Start Date</label>
-                    <input 
-                      type="date"
-                      className="input-field"
-                      value={fromDate}
-                      onChange={e => setFromDate(e.target.value)}
-                      required
-                    />
-                  </div>
-                  <div className="input-group">
-                    <label className="input-label">Start Time</label>
-                    <input 
-                      type="time"
-                      className="input-field"
-                      value={fromTime}
-                      onChange={e => setFromTime(e.target.value)}
-                      required
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div style={{ marginBottom: '1.25rem' }}>
-                <strong style={{ fontSize: '0.85rem', color: 'var(--color-info)', display: 'block', marginBottom: '0.4rem' }}>
-                  Available Until (Date & Time)
-                </strong>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-                  <div className="input-group">
-                    <label className="input-label">End Date</label>
-                    <input 
-                      type="date"
-                      className="input-field"
-                      value={toDate}
-                      onChange={e => setToDate(e.target.value)}
-                      required
-                    />
-                  </div>
-                  <div className="input-group">
-                    <label className="input-label">End Time</label>
-                    <input 
-                      type="time"
-                      className="input-field"
-                      value={toTime}
-                      onChange={e => setToTime(e.target.value)}
-                      required
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '1.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-                {targetSlot.availability ? (
-                  <button 
-                    type="button" 
-                    className="btn btn-danger btn-sm" 
-                    onClick={handleRemoveSchedule}
-                    disabled={savingSchedule}
-                  >
-                    Remove Schedule
-                  </button>
-                ) : <div />}
-
-                <div style={{ display: 'flex', gap: '0.75rem' }}>
-                  <button type="button" className="btn btn-secondary" onClick={() => setShowScheduleModal(false)}>
-                    Cancel
-                  </button>
-                  <button type="submit" className="btn btn-primary" disabled={savingSchedule}>
-                    {savingSchedule ? 'Saving Window...' : 'Save Schedule Window'}
-                  </button>
-                </div>
-              </div>
-            </form>
           </div>
-        </div>
-      )}
+          <div className="modal-footer">
+            <button type="button" className="btn btn-secondary" onClick={() => setShowAddModal(false)} disabled={savingSlot}>Cancel</button>
+            <button type="submit" className="btn btn-primary" disabled={savingSlot}>
+              {savingSlot ? <><Spinner /> Saving…</> : 'Add slot'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal
+        open={showScheduleModal && !!targetSlot}
+        onClose={() => !savingSchedule && setShowScheduleModal(false)}
+        icon={<CalendarRange size={20} />}
+        title={<>Availability · <span className="mono">{targetSlot?.slotNumber}</span></>}
+        subtitle="People can book this slot for any time inside this window."
+      >
+        <form onSubmit={handleSaveSchedule}>
+          <div className="modal-body">
+            <div className="form-section-label" style={{ color: 'var(--color-success-text)' }}>
+              <span className="dot" /> From
+            </div>
+            <div className="grid grid-2" style={{ gap: '0.75rem' }}>
+              <div className="input-group">
+                <label className="input-label">Start date</label>
+                <input type="date" className="input-field" value={fromDate} onChange={e => setFromDate(e.target.value)} required />
+              </div>
+              <div className="input-group">
+                <label className="input-label">Start time</label>
+                <input type="time" className="input-field" value={fromTime} onChange={e => setFromTime(e.target.value)} required />
+              </div>
+            </div>
+
+            <div className="form-section-label" style={{ color: 'var(--color-info-text)' }}>
+              <span className="dot" /> Until
+            </div>
+            <div className="grid grid-2" style={{ gap: '0.75rem' }}>
+              <div className="input-group" style={{ marginBottom: 0 }}>
+                <label className="input-label">End date</label>
+                <input type="date" className={`input-field ${windowInvalid ? 'invalid' : ''}`} value={toDate} min={fromDate} onChange={e => setToDate(e.target.value)} required />
+              </div>
+              <div className="input-group" style={{ marginBottom: 0 }}>
+                <label className="input-label">End time</label>
+                <input type="time" className={`input-field ${windowInvalid ? 'invalid' : ''}`} value={toTime} onChange={e => setToTime(e.target.value)} required />
+              </div>
+            </div>
+            {windowInvalid && <div className="field-error" style={{ marginTop: '0.6rem' }}>The end must be after the start.</div>}
+          </div>
+
+          <div className="modal-footer" style={{ justifyContent: 'space-between' }}>
+            {targetSlot?.availability ? (
+              <button type="button" className="btn btn-danger-soft" onClick={handleRemoveSchedule} disabled={savingSchedule}>
+                <CalendarOff size={15} />
+                <span>Remove</span>
+              </button>
+            ) : <span />}
+            <div className="row gap-sm">
+              <button type="button" className="btn btn-secondary" onClick={() => setShowScheduleModal(false)} disabled={savingSchedule}>
+                Cancel
+              </button>
+              <button type="submit" className="btn btn-primary" disabled={savingSchedule || windowInvalid}>
+                {savingSchedule ? <><Spinner /> Saving…</> : 'Save window'}
+              </button>
+            </div>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }

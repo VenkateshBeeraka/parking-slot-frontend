@@ -1,16 +1,37 @@
-# React + Vite
+# ParkPulse — web app
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+React + Vite frontend for the parking slot booking platform. It talks to the backend only through the API gateway.
 
-Currently, two official plugins are available:
+## Getting started
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```bash
+npm install
+npm run dev        # http://localhost:3000
+```
 
-## React Compiler
+The dev server reads `.env.development`, which points at the gateway started by `docker compose` (`http://localhost:8765`).
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Configuration
 
-## Expanding the Oxlint configuration
+| Variable | Purpose |
+| --- | --- |
+| `VITE_API_BASE_URL` | Base URL of the API gateway. Leave empty to call the same origin the app is served from (recommended in production, behind the gateway or a reverse proxy). |
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+Copy `.env.example` to `.env.production.local` (or set the variable in your CI) before `npm run build`.
+
+## Scripts
+
+- `npm run dev` — start the dev server
+- `npm run build` — production build into `dist/`
+- `npm run preview` — serve the production build locally
+- `npm run lint` — run oxlint
+
+## Structure
+
+- `src/App.jsx` — session handling, routing and the app shell
+- `src/lib/router.js` — hash-based routing (`#/bookings`, `#/slots?building=BLD-101`), works on any static host
+- `src/lib/format.js` — date and booking helpers
+- `src/services/api.js` — API client; normalises backend responses and error messages
+- `src/components/` — pages (`*View.jsx`), the sign-in page, sidebar/topbar and shared UI in `ui.jsx`
+
+Members see Overview, Book parking, My bookings, Buildings and Notifications. Administrators additionally get Parking slots, Reservations and Users.

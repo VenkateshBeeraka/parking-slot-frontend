@@ -1,140 +1,145 @@
-import React, { useState, useEffect } from 'react';
-import { Bell, CheckCircle2, XCircle, RefreshCw, MessageSquare, Radio } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Bell, CheckCircle2, XCircle, RefreshCw, Building2, SquareParking, Clock, CalendarCheck, User, AlertCircle } from 'lucide-react';
 import { api } from '../services/api';
+import { buildHref } from '../lib/router';
+import { timeAgo, formatDateTime, formatRange, parseDate } from '../lib/format';
+import { PageHeader, EmptyState, Segmented, Skeleton } from './ui';
 
-export default function NotificationsView({ addToast }) {
-  const [notifications, setNotifications] = useState([]);
+const isConfirmation = (n) => !n.status || ['CONFIRMED', 'SLOT BOOKED'].includes(String(n.status).toUpperCase());
+
+export default function NotificationsView({ admin, notifications, lastSeen, refreshNotifications, markNotificationsSeen }) {
+  const [scope, setScope] = useState('mine');
+  const [everyone, setEveryone] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  // Remember what was unread when the page opened, so the markers stay visible while reading
+  const [seenAtOpen] = useState(lastSeen);
 
-  const fetchNotifications = async () => {
+  const load = async (which = scope) => {
     setLoading(true);
+    setError(null);
     try {
-      const data = await api.notifications.getAll();
-      setNotifications(Array.isArray(data) ? data : []);
+      if (which === 'all') setEveryone(await api.notifications.getAll());
+      else await refreshNotifications();
     } catch (err) {
-      console.warn(err);
-      // Fallback sample notification if notification service returns empty
-      setNotifications([]);
+      setError(err.message);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchNotifications();
+    load('mine').then(() => markNotificationsSeen());
   }, []);
 
+  const changeScope = (next) => {
+    setScope(next);
+    load(next);
+  };
+
+  const list = scope === 'all' ? everyone : notifications;
+  const isUnread = (n) => scope === 'mine' && (parseDate(n.timestamp)?.getTime() || 0) > seenAtOpen;
+
   return (
-    <div>
-      {/* Header */}
-      <div style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: '2rem',
-        flexWrap: 'wrap',
-        gap: '1rem'
-      }}>
-        <div>
-          <h1 style={{ fontSize: '1.8rem', fontWeight: 800 }}>
-            System <span className="gradient-text">Notifications & Alerts</span>
-          </h1>
-          <p style={{ color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
-            Event-driven messaging dispatched asynchronously through Apache Kafka.
-          </p>
-        </div>
-
-        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.4rem',
-            fontSize: '0.8rem',
-            color: 'var(--color-success)',
-            background: 'var(--color-success-bg)',
-            padding: '0.4rem 0.75rem',
-            borderRadius: 'var(--radius-full)',
-            border: '1px solid rgba(16, 185, 129, 0.3)'
-          }}>
-            <Radio size={14} className="animate-pulse" />
-            <span>Kafka Consumer Active</span>
-          </div>
-
-          <button className="btn btn-secondary" onClick={fetchNotifications} disabled={loading}>
-            <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+    <div style={{ maxWidth: 880, margin: '0 auto' }}>
+      <PageHeader
+        eyebrow={<><Bell size={13} /> Activity</>}
+        title="Notifications"
+        subtitle={scope === 'all' ? 'Booking activity across all users.' : 'Updates about your reservations.'}
+        actions={
+          <button className="btn btn-secondary" onClick={() => load()} disabled={loading}>
+            <RefreshCw size={16} className={loading ? 'spin' : ''} />
             <span>Refresh</span>
           </button>
-        </div>
-      </div>
+        }
+      />
 
-      {loading ? (
-        <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)' }}>
-          Reading event logs from Notification Service...
-        </div>
-      ) : notifications.length === 0 ? (
-        <div className="glass-card" style={{ textAlign: 'center', padding: '3.5rem' }}>
-          <Bell size={48} style={{ color: 'var(--text-muted)', marginBottom: '1rem' }} />
-          <h3>No Notifications Yet</h3>
-          <p style={{ color: 'var(--text-secondary)', marginTop: '0.5rem', maxWidth: '480px', margin: '0.5rem auto 0 auto' }}>
-            When a user books or cancels a parking slot, the Availability Service produces an event to Kafka (<code>booking-events</code> topic), which is consumed and logged here.
-          </p>
-        </div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          {notifications.map((n, idx) => {
-            const isConfirmed = n.eventType === 'BOOKING_CONFIRMED';
-            return (
-              <div 
-                key={n.id || idx} 
-                className="glass-card" 
-                style={{
-                  padding: '1.25rem 1.5rem',
-                  display: 'flex',
-                  alignItems: 'flex-start',
-                  gap: '1rem',
-                  borderLeft: `4px solid ${isConfirmed ? 'var(--color-success)' : 'var(--color-warning)'}`
-                }}
-              >
-                <div style={{
-                  width: '40px',
-                  height: '40px',
-                  borderRadius: '50%',
-                  background: isConfirmed ? 'var(--color-success-bg)' : 'var(--color-warning-bg)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: isConfirmed ? 'var(--color-success)' : 'var(--color-warning)',
-                  flexShrink: 0
-                }}>
-                  {isConfirmed ? <CheckCircle2 size={20} /> : <XCircle size={20} />}
-                </div>
-
-                <div style={{ flex: 1 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                      <strong style={{ fontSize: '1rem' }}>{n.eventType || 'SYSTEM_EVENT'}</strong>
-                      <span className="badge badge-primary" style={{ fontSize: '0.7rem' }}>Kafka</span>
-                    </div>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                      {n.timestamp ? new Date(n.timestamp).toLocaleString() : 'Just now'}
-                    </span>
-                  </div>
-
-                  <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
-                    {n.message || `Booking #${n.bookingId} processed for User #${n.userId}`}
-                  </p>
-
-                  <div style={{ display: 'flex', gap: '1.5rem', fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.6rem' }}>
-                    {n.buildingNumber && <span>Building: <strong style={{ color: 'var(--text-primary)' }}>{n.buildingNumber}</strong></span>}
-                    {n.slotNumber && <span>Slot: <strong style={{ color: 'var(--text-primary)' }}>{n.slotNumber}</strong></span>}
-                    {n.vehicleNumber && <span>Vehicle: <strong style={{ color: 'var(--text-primary)' }}>{n.vehicleNumber}</strong></span>}
-                  </div>
-                </div>
-              </div>
-            );
-          })}
+      {admin && (
+        <div className="mb-lg">
+          <Segmented
+            value={scope}
+            onChange={changeScope}
+            options={[{ value: 'mine', label: 'My notifications' }, { value: 'all', label: 'Everyone' }]}
+          />
         </div>
       )}
+
+      <div className="card" style={{ overflow: 'hidden' }}>
+        {loading && list.length === 0 ? (
+          <div>
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="feed-item" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                <Skeleton width={40} height={40} radius={999} />
+                <div className="stack gap-sm grow">
+                  <Skeleton width="30%" height={13} />
+                  <Skeleton width="70%" height={11} />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : error ? (
+          <EmptyState icon={<AlertCircle size={26} />} title="Couldn't load notifications"
+            action={<button className="btn btn-secondary" onClick={() => load()}>Try again</button>}>
+            {error}
+          </EmptyState>
+        ) : list.length === 0 ? (
+          <EmptyState icon={<Bell size={28} />} title="You're all caught up"
+            action={scope === 'mine' && <a className="btn btn-primary" href={buildHref('book')}>Book parking</a>}>
+            {scope === 'all' ? 'No booking activity yet.' : "When you book a slot, you'll get a confirmation here."}
+          </EmptyState>
+        ) : (
+          <div className="stagger" key={scope}>
+            {list.map((n, idx) => {
+              const ok = isConfirmation(n);
+              const unread = isUnread(n);
+              return (
+                <div
+                  key={`${n.bookingId}-${idx}`}
+                  className="feed-item"
+                  style={{
+                    '--i': Math.min(idx, 12),
+                    borderBottom: idx < list.length - 1 ? '1px solid var(--border-subtle)' : 'none',
+                    background: unread ? 'var(--accent-soft)' : undefined
+                  }}
+                >
+                  <span className={`icon-tile ${ok ? 'tone-success' : 'tone-warning'}`} style={{ borderRadius: '50%' }}>
+                    {ok ? <CheckCircle2 size={19} /> : <XCircle size={19} />}
+                  </span>
+
+                  <div className="grow">
+                    <div className="row between gap-md wrap">
+                      <span className="strong">{ok ? 'Booking confirmed' : 'Booking update'}</span>
+                      <span className="text-xs muted row gap-xs" title={formatDateTime(n.timestamp)}>
+                        <Clock size={12} />
+                        {timeAgo(n.timestamp)}
+                      </span>
+                    </div>
+
+                    <p className="text-sm secondary" style={{ marginTop: '0.25rem' }}>
+                      {scope === 'all' && n.recipientName ? `${n.recipientName} reserved` : 'Your reservation for'} slot{' '}
+                      <strong className="strong mono">{n.slotNumber}</strong> at <strong className="strong">{n.buildingName || n.buildingNumber}</strong>
+                      {n.bookingDate ? <> for {n.endDate ? formatRange(n.bookingDate, n.endDate) : formatDateTime(n.bookingDate, { weekday: true })}</> : null}
+                      {ok ? ' is confirmed.' : '.'}
+                    </p>
+
+                    <div className="feed-meta">
+                      {n.buildingNumber && <span className="row gap-xs"><Building2 size={13} /> {n.buildingNumber}</span>}
+                      {n.slotNumber && <span className="row gap-xs"><SquareParking size={13} /> <span className="mono">{n.slotNumber}</span></span>}
+                      {scope === 'all' && n.recipientEmail && <span className="row gap-xs"><User size={13} /> {n.recipientEmail}</span>}
+                      {scope === 'mine' && (
+                        <a className="card-link" href={buildHref('bookings')} style={{ padding: 0, fontSize: '0.78rem' }}>
+                          <CalendarCheck size={13} /> View booking
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                  {unread && <span className="unread-dot" aria-label="Unread" />}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

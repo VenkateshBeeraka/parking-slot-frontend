@@ -1,517 +1,370 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  CalendarCheck, 
-  Clock, 
-  Check, 
-  X, 
-  Trash2, 
-  RefreshCw, 
-  Lock, 
-  Timer 
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  CalendarPlus,
+  Building2,
+  Check,
+  ArrowRight,
+  MapPin,
+  AlertTriangle,
+  SquareParking,
+  CalendarCheck,
+  Layers
 } from 'lucide-react';
 import { api } from '../services/api';
-import SignInPrompt from './SignInPrompt';
+import { navigate, buildHref } from '../lib/router';
+import {
+  toDateInput,
+  toTimeInput,
+  nextHalfHour,
+  parseDate,
+  dateToApi,
+  formatRange,
+  formatDuration,
+  MAX_DURATION_MS
+} from '../lib/format';
+import { PageHeader, EmptyState, Skeleton, Spinner, Modal, Segmented } from './ui';
 
-export default function BookingView({ user, onLoginClick, selectedBuilding, setSelectedBuilding, bookingSlot, setBookingSlot, addToast }) {
-  const todayStr = new Date().toISOString().split('T')[0];
-  const now = new Date();
-  const pad = (n) => String(n).padStart(2, '0');
-  const defaultTime = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+const DURATIONS = [
+  { value: '1', label: '1 hr' },
+  { value: '2', label: '2 hrs' },
+  { value: '4', label: '4 hrs' },
+  { value: '8', label: '8 hrs' },
+  { value: 'custom', label: 'Custom' }
+];
 
-  const [date, setDate] = useState(todayStr);
-  const [time, setTime] = useState(defaultTime);
+export default function BookingView({ params, addToast, refreshNotifications }) {
+  const start = nextHalfHour();
   const [buildings, setBuildings] = useState([]);
+  const [buildingsLoading, setBuildingsLoading] = useState(true);
   const [slots, setSlots] = useState([]);
-  const [availabilityList, setAvailabilityList] = useState([]);
-  const [activeBookings, setActiveBookings] = useState([]);
-  const [loadingAvail, setLoadingAvail] = useState(false);
-  const [loadingBookings, setLoadingBookings] = useState(false);
-  const [runningExpiryCheck, setRunningExpiryCheck] = useState(false);
-
-  // Booking Form State
-  const [vehicleNumber, setVehicleNumber] = useState('KA-01-AB-1234');
+  const [slotsLoading, setSlotsLoading] = useState(false);
+  const [openSlots, setOpenSlots] = useState([]);
+  const [availLoading, setAvailLoading] = useState(false);
+  const [date, setDate] = useState(params.date || toDateInput(start));
+  const [time, setTime] = useState(params.time || toTimeInput(start));
+  const [duration, setDuration] = useState(DURATIONS.some(d => d.value === params.duration) ? params.duration : '2');
+  // Seeds the custom end fields (e.g. when arriving from Quick book with "Custom")
+  const initialEnd = new Date((parseDate(`${params.date || toDateInput(start)} ${params.time || toTimeInput(start)}`) || start).getTime() + 2 * 3600000);
+  const [endDate, setEndDate] = useState(toDateInput(initialEnd));
+  const [endTime, setEndTime] = useState(toTimeInput(initialEnd));
+  const [selectedSlot, setSelectedSlot] = useState(params.slot || '');
   const [submitting, setSubmitting] = useState(false);
+  const [confirmed, setConfirmed] = useState(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
-  // Helper to format Date + Time string for backend API
-  const getFullDateTime = () => {
-    const formattedTime = time ? (time.length === 5 ? `${time}:00` : time) : '00:00:00';
-    return `${date} ${formattedTime}`;
+  const building = params.building || buildings[0]?.buildingNumber || '';
+  const currentBuilding = buildings.find(b => b.buildingNumber === building);
+
+  const setBuilding = (value) => {
+    setSelectedSlot('');
+    navigate('book', { building: value }, { replace: true });
   };
 
-  // Helper to nicely display date & time
-  const formatDisplayDateTime = (val) => {
-    if (!val) return 'N/A';
-    try {
-      const d = new Date(val);
-      if (isNaN(d.getTime())) return String(val);
-      return d.toLocaleString('en-US', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: true
-      });
-    } catch {
-      return String(val);
-    }
-  };
-
-  // Load buildings
   useEffect(() => {
-    if (!user) return;
     api.buildings.getAll()
-      .then(bList => {
-        const list = Array.isArray(bList) ? bList : [];
-        setBuildings(list);
-        if (!selectedBuilding && list.length > 0) {
-          setSelectedBuilding(list[0].buildingNumber);
-        }
-      })
-      .catch(console.error);
-  }, [user]);
+      .then(setBuildings)
+      .catch(err => addToast(err.message, 'error'))
+      .finally(() => setBuildingsLoading(false));
+  }, []);
 
-  // Load slots for selected building
   useEffect(() => {
-    if (!user || !selectedBuilding) return;
-    api.slots.getByBuilding(selectedBuilding)
-      .then(sList => {
-        const list = Array.isArray(sList) ? sList : [];
-        setSlots(list);
-        if (list.length > 0) {
-          if (!bookingSlot || !list.some(s => s.slotNumber === bookingSlot)) {
-            setBookingSlot(list[0].slotNumber);
-          }
-        } else {
-          setBookingSlot('');
-        }
-      })
-      .catch(console.error);
-  }, [selectedBuilding, user]);
+    if (!building) return;
+    setSlotsLoading(true);
+    api.slots.getByBuilding(building)
+      .then(setSlots)
+      .catch(() => setSlots([]))
+      .finally(() => setSlotsLoading(false));
+  }, [building]);
 
-  // Load availability with date and time
-  const checkAvailability = async () => {
-    if (!user || !selectedBuilding || !date) return;
-    setLoadingAvail(true);
-    try {
-      const fullDateTime = getFullDateTime();
-      const data = await api.availability.getByBuildingAndDate(selectedBuilding, fullDateTime);
-      setAvailabilityList(Array.isArray(data) ? data : []);
-    } catch (err) {
-      setAvailabilityList([]);
-    } finally {
-      setLoadingAvail(false);
+  const startAt = parseDate(`${date} ${time}`);
+  const endAt = duration === 'custom'
+    ? parseDate(`${endDate} ${endTime}`)
+    : startAt && new Date(startAt.getTime() + Number(duration) * 3600000);
+  const periodMs = startAt && endAt ? endAt.getTime() - startAt.getTime() : 0;
+  const inPast = startAt && startAt.getTime() < Date.now();
+  const endInvalid = !endAt || periodMs <= 0;
+  const tooLong = periodMs > MAX_DURATION_MS;
+  const periodValid = startAt && !inPast && !endInvalid && !tooLong;
+
+  const changeDuration = (value) => {
+    // Start the custom end from whatever the current period ends at
+    if (value === 'custom' && endAt) {
+      setEndDate(toDateInput(endAt));
+      setEndTime(toTimeInput(endAt));
     }
+    setDuration(value);
   };
 
-  // Load active bookings
-  const loadBookings = async () => {
-    if (!user) return;
-    setLoadingBookings(true);
-    try {
-      const bList = await api.bookings.getAll();
-      setActiveBookings(Array.isArray(bList) ? bList : []);
-    } catch (err) {
-      setActiveBookings([]);
-    } finally {
-      setLoadingBookings(false);
-    }
+  const loadAvailability = () => {
+    if (!building || !startAt || !endAt || endInvalid || tooLong) return;
+    setAvailLoading(true);
+    api.availability.getOpenSlots(building, dateToApi(startAt), dateToApi(endAt))
+      .then(setOpenSlots)
+      .catch(() => setOpenSlots([]))
+      .finally(() => setAvailLoading(false));
   };
 
   useEffect(() => {
-    if (user && selectedBuilding && date) {
-      checkAvailability();
-    }
-  }, [selectedBuilding, date, time, user]);
+    loadAvailability();
+  }, [building, date, time, duration, endDate, endTime]);
 
-  useEffect(() => {
-    if (user) {
-      loadBookings();
-    }
-  }, [user]);
+  const isOpen = (slotNumber) => openSlots.some(s => String(s).trim().toLowerCase() === String(slotNumber).trim().toLowerCase());
+  const slotState = (s) => {
+    if (!s.availability?.fromDate) return 'unscheduled';
+    return isOpen(s.slotNumber) ? 'open' : 'taken';
+  };
 
-  const handleBookSlot = async (e) => {
+  const byFloor = useMemo(() => {
+    const groups = {};
+    slots.forEach(s => {
+      const key = s.floorNumber ?? '—';
+      (groups[key] = groups[key] || []).push(s);
+    });
+    return Object.entries(groups).sort(([a], [b]) => String(a).localeCompare(String(b), undefined, { numeric: true }));
+  }, [slots]);
+
+  const openCount = slots.filter(s => slotState(s) === 'open').length;
+  const selected = slots.find(s => s.slotNumber === selectedSlot);
+  const selectedUnavailable = selected && periodValid && !availLoading && slotState(selected) !== 'open';
+  const canSubmit = !!building && !!selected && periodValid && !selectedUnavailable && !submitting;
+
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!selectedBuilding || !bookingSlot || !date || !time) {
-      addToast('Please select a building, slot, date, and time.', 'error');
-      return;
-    }
-
-    const fullDateTime = getFullDateTime();
-    const targetDate = new Date(`${date}T${time.length === 5 ? time + ':00' : time}`);
-    if (targetDate.getTime() < Date.now()) {
-      addToast('Cannot reserve a slot for a past date and time.', 'error');
-      return;
-    }
-
+    if (!canSubmit) return;
     setSubmitting(true);
     try {
-      const payload = {
-        vehicleNumber: vehicleNumber || 'AP-09-XY-9999',
-        userId: user ? user.id || 1 : 1
-      };
-      await api.bookings.create(selectedBuilding, bookingSlot, fullDateTime, payload);
-      addToast(`Slot ${bookingSlot} successfully booked for ${date} at ${time}!`, 'success');
-      checkAvailability();
-      loadBookings();
+      await api.bookings.create(building, selectedSlot, dateToApi(startAt), dateToApi(endAt));
+      setConfirmed({
+        building: currentBuilding?.buildingName || building,
+        slot: selectedSlot,
+        floor: selected?.floorNumber,
+        start: startAt,
+        end: endAt
+      });
+      setConfirmOpen(true);
+      setSelectedSlot('');
+      loadAvailability();
+      setTimeout(() => refreshNotifications?.(), 1500);
     } catch (err) {
-      addToast(err.message || 'Failed to book parking slot', 'error');
+      addToast(err.message, 'error');
+      loadAvailability();
     } finally {
       setSubmitting(false);
     }
   };
 
-  const handleCancelBooking = async (bookingId) => {
-    if (!window.confirm(`Cancel reservation #${bookingId}?`)) return;
-    try {
-      await api.bookings.cancel(bookingId);
-      addToast(`Reservation #${bookingId} cancelled successfully`, 'success');
-      checkAvailability();
-      loadBookings();
-    } catch (err) {
-      addToast(err.message || 'Failed to cancel reservation', 'error');
-    }
-  };
-
-  const handleTriggerExpiryCheck = async () => {
-    setRunningExpiryCheck(true);
-    try {
-      const res = await api.bookings.closeExpired();
-      addToast(typeof res === 'string' ? res : 'Scheduler check completed: expired bookings marked as CLOSED', 'success');
-      loadBookings();
-      checkAvailability();
-    } catch (err) {
-      addToast(err.message || 'Failed to trigger expiration check', 'error');
-    } finally {
-      setRunningExpiryCheck(false);
-    }
-  };
-
-  if (!user) {
-    return (
-      <SignInPrompt 
-        onLoginClick={onLoginClick}
-        title="Slot Reservation Locked"
-        message="Check live slot availability, reserve parking spots, and manage active booking schedules by signing in to your account."
-      />
-    );
-  }
-
   return (
     <div>
-      {/* Header */}
-      <div style={{ marginBottom: '2rem' }}>
-        <h1 style={{ fontSize: '1.8rem', fontWeight: 800 }}>
-          Slot <span className="gradient-text">Reservations & Availability</span>
-        </h1>
-        <p style={{ color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
-          Real-time calendar scheduling with exact date & time powered by Availability & Booking Microservice.
-        </p>
-      </div>
+      <PageHeader
+        eyebrow={<><CalendarPlus size={13} /> Reserve</>}
+        title="Book parking"
+        subtitle="Choose a building and how long you'll stay, then pick an open bay."
+      />
 
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))',
-        gap: '2rem',
-        marginBottom: '2.5rem'
-      }}>
-        {/* Booking Card */}
-        <div className="glass-card" style={{ padding: '1.75rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '1.25rem' }}>
-            <CalendarCheck size={22} color="var(--accent-primary)" />
-            <h2 style={{ fontSize: '1.3rem' }}>Reserve a Parking Slot</h2>
-          </div>
-
-          <form onSubmit={handleBookSlot}>
-            <div className="input-group">
-              <label className="input-label">Select Building</label>
-              <select 
-                className="input-field"
-                value={selectedBuilding}
-                onChange={e => setSelectedBuilding(e.target.value)}
-              >
-                {buildings.map(b => (
-                  <option key={b.buildingNumber} value={b.buildingNumber}>
-                    {b.buildingName} ({b.buildingNumber})
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="input-group">
-              <label className="input-label">Select Slot</label>
-              <select 
-                className="input-field"
-                value={bookingSlot}
-                onChange={e => setBookingSlot(e.target.value)}
-              >
-                {slots.length === 0 && <option value="">No slots available in this building</option>}
-                {slots.map(s => (
-                  <option key={s.slotNumber} value={s.slotNumber}>
-                    {s.slotNumber} (Floor {s.floorNumber}, Wing {s.division})
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Date and Time Inputs */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-              <div className="input-group">
-                <label className="input-label">Reservation Date</label>
-                <input 
-                  type="date" 
-                  className="input-field"
-                  value={date}
-                  onChange={e => setDate(e.target.value)}
-                  min={todayStr}
-                  required
-                />
-              </div>
-
-              <div className="input-group">
-                <label className="input-label">Reservation Time</label>
-                <input 
-                  type="time" 
-                  className="input-field"
-                  value={time}
-                  onChange={e => setTime(e.target.value)}
-                  required
-                />
+      <div className="grid grid-booking">
+        <form onSubmit={handleSubmit} className="card stack" style={{ animation: 'riseIn 420ms var(--ease-out) backwards', alignSelf: 'start' }}>
+          <div className="card-header">
+            <div className="row gap-md">
+              <span className="icon-tile"><CalendarPlus size={18} /></span>
+              <div>
+                <h2 className="section-title">Where and when</h2>
+                <p className="section-subtitle">Availability updates as you change these</p>
               </div>
             </div>
+          </div>
+
+          <div className="card-body">
+            <div className="input-group">
+              <label className="input-label">Building</label>
+              {buildingsLoading ? (
+                <Skeleton height={42} radius={10} />
+              ) : (
+                <div className="input-wrap">
+                  <Building2 size={16} className="input-icon" />
+                  <select className="input-field" value={building} onChange={e => setBuilding(e.target.value)} disabled={!buildings.length}>
+                    {buildings.length === 0 && <option value="">No buildings available</option>}
+                    {buildings.map(b => (
+                      <option key={b.buildingNumber} value={b.buildingNumber}>{b.buildingName}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {currentBuilding && (
+                <span className="input-hint row gap-xs"><MapPin size={12} />{[currentBuilding.area, currentBuilding.town].filter(Boolean).join(', ')}</span>
+              )}
+            </div>
+
+            <div className="grid grid-2" style={{ gap: '0.75rem' }}>
+              <div className="input-group">
+                <label className="input-label">Date</label>
+                <input type="date" className="input-field" value={date} min={toDateInput(new Date())} onChange={e => setDate(e.target.value)} required />
+              </div>
+              <div className="input-group">
+                <label className="input-label">Start time</label>
+                <input type="time" className={`input-field ${inPast ? 'invalid' : ''}`} value={time} onChange={e => setTime(e.target.value)} required />
+              </div>
+            </div>
+            {inPast && <div className="field-error" style={{ marginTop: '-0.5rem', marginBottom: '1rem' }}>Choose a start time in the future.</div>}
 
             <div className="input-group">
-              <label className="input-label">Vehicle Registration #</label>
-              <input 
-                type="text" 
-                className="input-field"
-                placeholder="e.g. MH-02-CD-5678"
-                value={vehicleNumber}
-                onChange={e => setVehicleNumber(e.target.value)}
-                required
-              />
+              <label className="input-label">How long?</label>
+              <Segmented value={duration} onChange={changeDuration} options={DURATIONS} />
             </div>
 
-            <button 
-              type="submit" 
-              className="btn btn-primary" 
-              style={{ width: '100%', marginTop: '0.5rem' }}
-              disabled={submitting || slots.length === 0}
-            >
-              {submitting ? 'Confirming Reservation...' : 'Confirm & Reserve Slot'}
-            </button>
-          </form>
-        </div>
+            {duration === 'custom' && (
+              <div className="grid grid-2 form-swap" style={{ gap: '0.75rem' }}>
+                <div className="input-group">
+                  <label className="input-label">End date</label>
+                  <input type="date" className={`input-field ${endInvalid || tooLong ? 'invalid' : ''}`} value={endDate} min={date} onChange={e => setEndDate(e.target.value)} required />
+                </div>
+                <div className="input-group">
+                  <label className="input-label">End time</label>
+                  <input type="time" className={`input-field ${endInvalid || tooLong ? 'invalid' : ''}`} value={endTime} onChange={e => setEndTime(e.target.value)} required />
+                </div>
+              </div>
+            )}
+            {duration === 'custom' && endInvalid && endDate && endTime && (
+              <div className="field-error" style={{ marginTop: '-0.5rem', marginBottom: '1rem' }}>The end must be after the start.</div>
+            )}
+            {tooLong && <div className="field-error" style={{ marginTop: '-0.5rem', marginBottom: '1rem' }}>A booking can be at most 7 days long.</div>}
 
-        {/* Live Availability Status for Date & Time */}
-        <div className="glass-card" style={{ padding: '1.75rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-              <Clock size={22} color="var(--color-success)" />
-              <h2 style={{ fontSize: '1.3rem' }}>Schedule Availability</h2>
+            <div className="window-box stack gap-sm">
+              <div className="text-xs muted" style={{ textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>Your reservation</div>
+              <div className="row between text-sm"><span className="secondary">Building</span><span className="strong">{currentBuilding?.buildingName || '—'}</span></div>
+              <div className="row between text-sm">
+                <span className="secondary">Slot</span>
+                <span className={selectedSlot ? 'strong mono' : 'muted'} key={selectedSlot} style={{ animation: 'popIn 260ms var(--ease-spring)' }}>
+                  {selectedSlot ? `${selectedSlot}${selected?.floorNumber ? ` · Level ${selected.floorNumber}` : ''}` : 'Pick a slot'}
+                </span>
+              </div>
+              <div className="row between text-sm"><span className="secondary">When</span><span className="strong" style={{ textAlign: 'right' }}>{startAt && !endInvalid ? formatRange(startAt, endAt) : '—'}</span></div>
+              <div className="row between text-sm"><span className="secondary">Duration</span><span className="strong">{!endInvalid ? formatDuration(periodMs) : '—'}</span></div>
             </div>
-            <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
-              <span className="badge badge-primary">{date}</span>
-              <span className="badge badge-primary">{time}</span>
-            </div>
+
+            {selectedUnavailable && (
+              <div className="callout callout-warning" style={{ marginTop: '0.85rem' }}>
+                <AlertTriangle size={16} />
+                <span>{selectedSlot} isn't free for that whole period. Pick another slot or change the time.</span>
+              </div>
+            )}
           </div>
 
-          <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
-            Live slot availability for building <strong>{selectedBuilding}</strong> at <strong>{date} {time}</strong>:
-          </p>
+          <div className="card-footer" style={{ padding: '1rem 1.5rem' }}>
+            <button type="submit" className="btn btn-primary btn-lg btn-block" disabled={!canSubmit}>
+              {submitting ? <><Spinner size={17} /> Confirming…</> : <><span>Confirm reservation</span><ArrowRight size={17} /></>}
+            </button>
+          </div>
+        </form>
 
-          {loadingAvail ? (
-            <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
-              Querying Availability Service for {date} {time}...
+        <div className="card stack" style={{ animation: 'riseIn 420ms var(--ease-out) 80ms backwards' }}>
+          <div className="card-header">
+            <div className="row gap-md">
+              <span className="icon-tile tone-success"><SquareParking size={18} /></span>
+              <div>
+                <h2 className="section-title">Choose a slot</h2>
+                <p className="section-subtitle">{currentBuilding?.buildingName || 'Select a building'}</p>
+              </div>
             </div>
-          ) : slots.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
-              No slots configured in this building yet.
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', maxHeight: '280px', overflowY: 'auto' }}>
-              {slots.map(s => {
-                const isAvailable = Array.isArray(availabilityList) && availabilityList.some(item => {
-                  if (typeof item === 'string') return item.trim().toLowerCase() === s.slotNumber.trim().toLowerCase();
-                  if (item && typeof item === 'object') return item.slotNumber === s.slotNumber && item.available !== false;
-                  return false;
-                });
+            {!availLoading && !slotsLoading && slots.length > 0 && (
+              <span className="badge badge-success" key={`${openCount}-${date}-${time}`} style={{ animation: 'popIn 260ms var(--ease-spring)' }}>
+                {openCount} of {slots.length} open
+              </span>
+            )}
+          </div>
 
-                return (
-                  <div 
-                    key={s.slotNumber}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      padding: '0.75rem 1rem',
-                      background: 'rgba(255, 255, 255, 0.03)',
-                      border: '1px solid var(--border-subtle)',
-                      borderRadius: 'var(--radius-md)'
-                    }}
-                  >
-                    <div>
-                      <strong>{s.slotNumber}</strong>
-                      <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginLeft: '0.5rem' }}>
-                        (Floor {s.floorNumber}, {s.division})
-                      </span>
+          <div className="card-body" style={{ flex: 1 }}>
+            {slotsLoading || buildingsLoading ? (
+              <div className="slot-picker">
+                {Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} height={78} radius={10} />)}
+              </div>
+            ) : !building ? (
+              <EmptyState icon={<Building2 size={26} />} title="No buildings available">
+                There are no buildings to book in yet.
+              </EmptyState>
+            ) : slots.length === 0 ? (
+              <EmptyState icon={<SquareParking size={26} />} title="No slots in this building"
+                action={<a className="btn btn-secondary" href={buildHref('buildings')}>Browse other buildings</a>}>
+                This building doesn't offer any parking slots yet.
+              </EmptyState>
+            ) : (
+              <>
+                <div className="stack gap-lg" key={`${building}-${date}-${time}`}>
+                  {byFloor.map(([floor, list]) => (
+                    <div key={floor}>
+                      <div className="form-section-label" style={{ marginTop: 0 }}><Layers size={13} /> Level {floor}</div>
+                      <div className="slot-picker" style={{ maxHeight: 'none' }}>
+                        {list.map((s, i) => {
+                          const state = availLoading ? 'loading' : slotState(s);
+                          const isSelected = selectedSlot === s.slotNumber;
+                          return (
+                            <button
+                              type="button"
+                              key={s.slotNumber}
+                              className={`slot-option ${isSelected ? 'selected' : ''}`}
+                              style={{ '--i': i }}
+                              disabled={state !== 'open'}
+                              onClick={() => setSelectedSlot(s.slotNumber)}
+                              aria-pressed={isSelected}
+                            >
+                              {isSelected && <span className="check"><Check size={12} strokeWidth={3} /></span>}
+                              <span className="mono strong text-sm">{s.slotNumber}</span>
+                              <span className="text-xs muted">Wing {s.division || '—'}</span>
+                              {state === 'loading' ? (
+                                <Skeleton width={44} height={16} radius={99} />
+                              ) : (
+                                <span
+                                  className={`badge ${state === 'open' ? 'badge-success' : state === 'taken' ? 'badge-danger' : 'badge-neutral'}`}
+                                  style={{ fontSize: '0.65rem', padding: '0.1rem 0.45rem' }}
+                                >
+                                  {state === 'open' ? 'Open' : state === 'taken' ? 'Unavailable' : 'Not offered'}
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                      <span className={`badge ${isAvailable ? 'badge-success' : 'badge-danger'}`}>
-                        {isAvailable ? 'Available' : 'Booked'}
-                      </span>
-                      {isAvailable && (
-                        <button
-                          className="btn btn-secondary btn-sm"
-                          style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
-                          onClick={() => setBookingSlot(s.slotNumber)}
-                        >
-                          Select
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+                  ))}
+                </div>
+                <div className="legend" style={{ marginTop: '1.25rem' }}>
+                  <span><i style={{ background: 'var(--color-success)' }} /> Open</span>
+                  <span><i style={{ background: 'var(--color-danger)' }} /> Booked or outside hours</span>
+                  <span><i style={{ background: 'var(--text-muted)' }} /> Not offered</span>
+                  <span><i style={{ background: 'var(--accent)' }} /> Selected</span>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
 
-      {/* Scheduler Info Callout */}
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: '0.75rem',
-        padding: '0.9rem 1.25rem',
-        background: 'rgba(99, 102, 241, 0.08)',
-        border: '1px solid rgba(99, 102, 241, 0.2)',
-        borderRadius: 'var(--radius-md)',
-        marginBottom: '1.5rem',
-        fontSize: '0.85rem',
-        color: 'var(--text-secondary)'
-      }}>
-        <Timer size={20} color="var(--accent-primary)" style={{ flexShrink: 0 }} />
-        <div>
-          <strong style={{ color: 'var(--text-primary)' }}>Automated Booking Expiry Scheduler:</strong> An active Spring Boot scheduler runs in the background every 60s. Whenever a slot booking time crosses the current present time, its status is automatically updated to <span className="badge badge-neutral" style={{ padding: '0.1rem 0.45rem', fontSize: '0.7rem' }}>CLOSED</span>.
-        </div>
-      </div>
-
-      {/* Active Bookings Table */}
-      <div className="glass-card" style={{ padding: '1.75rem' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
-          <div>
-            <h2 style={{ fontSize: '1.3rem' }}>Parking Reservations Directory</h2>
-            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
-              All registered reservations with precise date-time stamps.
-            </p>
-          </div>
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <button 
-              className="btn btn-secondary btn-sm" 
-              onClick={handleTriggerExpiryCheck}
-              disabled={runningExpiryCheck}
-              title="Trigger background scheduler check now"
-            >
-              <RefreshCw size={13} className={runningExpiryCheck ? 'animate-spin' : ''} />
-              <span>{runningExpiryCheck ? 'Checking...' : 'Run Expiry Check'}</span>
-            </button>
-            <button className="btn btn-secondary btn-sm" onClick={loadBookings} disabled={loadingBookings}>
-              <RefreshCw size={13} className={loadingBookings ? 'animate-spin' : ''} />
-              <span>Refresh</span>
-            </button>
-          </div>
-        </div>
-
-        {loadingBookings ? (
-          <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
-            Loading bookings from Availability Service...
-          </div>
-        ) : activeBookings.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
-            No active reservations found. Create your first booking above!
-          </div>
-        ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem', textAlign: 'left' }}>
-              <thead>
-                <tr style={{ borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-muted)' }}>
-                  <th style={{ padding: '0.75rem 1rem' }}>ID</th>
-                  <th style={{ padding: '0.75rem 1rem' }}>Building</th>
-                  <th style={{ padding: '0.75rem 1rem' }}>Slot</th>
-                  <th style={{ padding: '0.75rem 1rem' }}>Booking Date & Time</th>
-                  <th style={{ padding: '0.75rem 1rem' }}>Vehicle</th>
-                  <th style={{ padding: '0.75rem 1rem' }}>Status</th>
-                  <th style={{ padding: '0.75rem 1rem', textAlign: 'right' }}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {activeBookings.map(b => {
-                  const isClosed = b.status && b.status.toUpperCase() === 'CLOSED';
-                  const isCancelled = b.status && b.status.toUpperCase() === 'CANCELLED';
-
-                  return (
-                    <tr key={b.id} style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.04)' }}>
-                      <td style={{ padding: '0.75rem 1rem', fontWeight: 600 }}>#{b.id}</td>
-                      <td style={{ padding: '0.75rem 1rem' }}>
-                        {b.buildingNumber || (b.slot && b.slot.building ? b.slot.building.buildingNumber : null) || selectedBuilding}
-                      </td>
-                      <td style={{ padding: '0.75rem 1rem' }}>
-                        <span className="badge badge-primary">
-                          {b.slotNumber || (b.slot ? b.slot.slotNumber : null) || `#${b.id}`}
-                        </span>
-                      </td>
-                      <td style={{ padding: '0.75rem 1rem' }}>
-                        <span style={{ fontFamily: 'monospace', fontSize: '0.85rem' }}>
-                          {formatDisplayDateTime(b.bookingDate || b.date)}
-                        </span>
-                      </td>
-                      <td style={{ padding: '0.75rem 1rem' }}>{b.vehicleNumber || 'N/A'}</td>
-                      <td style={{ padding: '0.75rem 1rem' }}>
-                        {isClosed ? (
-                          <span className="badge badge-neutral">
-                            <Lock size={11} />
-                            <span>CLOSED</span>
-                          </span>
-                        ) : isCancelled ? (
-                          <span className="badge badge-danger">
-                            <X size={11} />
-                            <span>CANCELLED</span>
-                          </span>
-                        ) : (
-                          <span className="badge badge-success">
-                            <Check size={11} />
-                            <span>{b.status || 'CONFIRMED'}</span>
-                          </span>
-                        )}
-                      </td>
-                      <td style={{ padding: '0.75rem 1rem', textAlign: 'right' }}>
-                        {isClosed ? (
-                          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                            Closed / Past
-                          </span>
-                        ) : (
-                          <button
-                            className="btn btn-danger btn-sm"
-                            style={{ padding: '0.3rem 0.65rem' }}
-                            onClick={() => handleCancelBooking(b.id)}
-                            title="Cancel booking"
-                          >
-                            <Trash2 size={13} />
-                            <span>Cancel</span>
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+      <Modal open={confirmOpen} onClose={() => setConfirmOpen(false)} size="sm">
+        {confirmed && (
+          <>
+            <div className="modal-body" style={{ textAlign: 'center', paddingTop: '2rem' }}>
+              <div className="success-check">
+                <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              </div>
+              <h2 className="modal-title">You're booked!</h2>
+              <p className="modal-subtitle">Your bay is reserved. You can manage it from My bookings.</p>
+              <div className="window-box stack gap-sm" style={{ marginTop: '1.25rem', textAlign: 'left' }}>
+                <div className="row between text-sm"><span className="secondary">Building</span><span className="strong">{confirmed.building}</span></div>
+                <div className="row between text-sm"><span className="secondary">Slot</span><span className="strong mono">{confirmed.slot}{confirmed.floor ? ` · Level ${confirmed.floor}` : ''}</span></div>
+                <div className="row between text-sm"><span className="secondary">When</span><span className="strong">{formatRange(confirmed.start, confirmed.end)}</span></div>
+                <div className="row between text-sm"><span className="secondary">Duration</span><span className="strong">{formatDuration(confirmed.end - confirmed.start)}</span></div>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={() => setConfirmOpen(false)}>Book another</button>
+              <a className="btn btn-primary" href={buildHref('bookings')} onClick={() => setConfirmOpen(false)}>
+                <CalendarCheck size={16} /> View my bookings
+              </a>
+            </div>
+          </>
         )}
-      </div>
+      </Modal>
     </div>
   );
 }
